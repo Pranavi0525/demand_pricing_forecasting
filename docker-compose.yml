@@ -1,27 +1,32 @@
-version: "3.9"
-
 services:
+
   api:
     build: .
+    container_name: fintech_api
     ports:
-      - "8000:8000"
+      - "8002:8000"
     volumes:
       - ./models:/app/models
-      - ./data:/app/data
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+      # removed ./data:/app/data
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
+    environment:
+      - PYTHONUNBUFFERED=1
 
   dashboard:
     build: .
+    container_name: fintech_dashboard
     ports:
-      - "8501:8501"
+      - "8503:8501"
     volumes:
       - ./models:/app/models
-      - ./data:/app/data
+      # removed ./data:/app/data
     command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
     depends_on:
       - api
+    environment:
+      - PYTHONUNBUFFERED=1

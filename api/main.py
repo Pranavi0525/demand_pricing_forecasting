@@ -1,21 +1,21 @@
 """
-api/main.py — Secured FastAPI Production Serving Layer
+api/main.py — Fintech Demand Forecasting REST API
 
-WHY WE ADDED AUTHENTICATION:
-Real fintech APIs never allow anyone to call them freely.
-Every request must carry an API key. This is exactly how
-Stripe, Razorpay, and Twilio work — you get an API key,
-you include it in every request, otherwise you get blocked.
+Endpoints:
+  GET  /health              — check API + which models are ready
+  GET  /leaderboard         — model comparison results
+  POST /predict             — demand forecast + optimal price
+  POST /pricing/optimize    — optimal price for any demand
+  GET  /pricing/segments    — risk-tiered pricing table
+  GET  /pricing/scenarios   — what-if scenario analysis
+  GET  /logs                — prediction audit trail
 
-WHY WE LOG PREDICTIONS:
-Every prediction made gets saved to a JSON log file.
-In production, this goes to a database (PostgreSQL).
-This is called an "audit trail" — companies need to know
-what predictions were made, when, and what the inputs were.
-If a model makes bad predictions, you can trace back why.
+Auth: every endpoint (except /health) requires header:
+  X-API-Key: fintech-api-key-2025
 
-Run: uvicorn api.main:app --reload --port 8000
-Docs: http://localhost:8000/docs
+Run locally:
+  uvicorn api.main:app --reload --port 8000
+  Then open: http://localhost:8000/docs
 """
 
 from fastapi import FastAPI, HTTPException, Depends, Security
@@ -29,18 +29,26 @@ import json
 import os
 from datetime import datetime
 
+# ── App setup ──────────────────────────────────────────────────
 app = FastAPI(
     title="Fintech Demand Forecasting API",
     description="""
-    ## Secured ML API for Demand Forecasting & Dynamic Pricing
-    
-    ### Authentication
-    All endpoints (except /health) require an API key.
-    Include it in the request header: `X-API-Key: your-key-here`
-    
-    ### Default API Key (for development)
-    `fintech-api-key-2025`
-    """,
+## Secured ML API for Demand Forecasting & Dynamic Pricing
+
+Built for fintech companies (KreditBee, Slice, LazyPay style) to:
+- Predict tomorrow's loan/product demand
+- Get the optimal price/interest rate to charge
+- Analyze pricing across borrower risk segments
+
+### Authentication
+All endpoints except `/health` require this header:
+```
+X-API-Key: fintech-api-key-2025
+```
+
+### Quick Test
+Use the **Authorize** button above, enter `fintech-api-key-2025`, then try `/predict`.
+""",
     version="2.0.0"
 )
 
@@ -54,50 +62,28 @@ app.add_middleware(
 MODEL_DIR = "models"
 LOG_PATH  = "models/prediction_log.json"
 
-# ─────────────────────────────────────────
-# API KEY AUTHENTICATION
-#
-# WHY: Without this, anyone can call your API.
-# With this, only people with the key can use it.
-# In production, you'd store keys in a database
-# and give each customer their own unique key.
-# ─────────────────────────────────────────
-
+# ── API Key Auth ────────────────────────────────────────────────
 VALID_API_KEYS = {
     "fintech-api-key-2025": "default-user",
-    "admin-key-9999": "admin",
+    "admin-key-9999":       "admin",
 }
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
-
 def verify_api_key(api_key: str = Security(api_key_header)):
-    """
-    Checks if the API key in the request header is valid.
-    If not, returns 403 Forbidden — same as what Stripe does.
-    """
     if api_key not in VALID_API_KEYS:
         raise HTTPException(
             status_code=403,
-            detail="Invalid or missing API key. Include 'X-API-Key: fintech-api-key-2025' in your request headers."
+            detail="Invalid or missing API key. Add header: X-API-Key: fintech-api-key-2025"
         )
     return VALID_API_KEYS[api_key]
 
-
-# ─────────────────────────────────────────
-# PREDICTION LOGGING
-#
-# WHY: We save every prediction to a log file.
-# This tells us: what inputs came in, what the model predicted,
-# what price was recommended, and when it happened.
-# In production this would go to PostgreSQL.
-# ─────────────────────────────────────────
-
+# ── Prediction logging ──────────────────────────────────────────
 def log_prediction(inputs: dict, prediction: dict):
-    """Save prediction to a JSON log file."""
-    log_entry = {
+    """Save every prediction to a JSON log — audit trail."""
+    entry = {
         "timestamp": datetime.now().isoformat(),
-        "inputs": inputs,
+        "inputs":     inputs,
         "prediction": prediction,
     }
     logs = []
@@ -107,105 +93,9 @@ def log_prediction(inputs: dict, prediction: dict):
                 logs = json.load(f)
             except Exception:
                 logs = []
-    logs.append(log_entry)
+    logs.append(entry)
     with open(LOG_PATH, "w") as f:
         json.dump(logs, f, indent=2)
-
-
-# ─────────────────────────────────────────
-# REQUEST / RESPONSE SCHEMAS
-#
-# WHY PYDANTIC: Pydantic automatically validates
-# every incoming request. If someone sends a string
-# where a number is expected, it rejects it immediately
-# with a clear error — before it even reaches your model.
-# ─────────────────────────────────────────
-
-class ForecastRequest(BaseModel):
-    lag_1: float         = Field(..., description="Demand 1 day ago",        example=312.5)
-    lag_3: float         = Field(..., description="Demand 3 days ago",       example=289.0)
-    lag_7: float         = Field(..., description="Demand 7 days ago",       example=301.2)
-    lag_14: float        = Field(..., description="Demand 14 days ago",      example=278.4)
-    rolling_mean_7: float  = Field(..., description="7-day rolling average", example=295.3)
-    rolling_std_7: float   = Field(..., description="7-day rolling std dev", example=18.2)
-    rolling_mean_14: float = Field(..., description="14-day rolling average",example=291.0)
-    rolling_max_7: float   = Field(..., description="7-day rolling max",     example=320.1)
-    rolling_min_7: float   = Field(..., description="7-day rolling min",     example=270.5)
-    momentum_3: float    = Field(..., description="3-day momentum (lag1-lag3)", example=23.5)
-    momentum_7: float    = Field(..., description="7-day momentum (lag1-lag7)", example=11.3)
-    week_of_month: int   = Field(..., ge=1, le=5,  description="Week of month (1-5)", example=2)
-    is_week_start: int   = Field(0,   ge=0, le=1,  description="1 if first week",    example=0)
-    is_week_end: int     = Field(0,   ge=0, le=1,  description="1 if last week",     example=0)
-    model: Literal["random_forest", "xgboost"] = Field("xgboost", description="Model to use")
-
-
-class ForecastResponse(BaseModel):
-    predicted_demand: float
-    model_used: str
-    optimal_price: float
-    projected_revenue: float
-    confidence: str
-    timestamp: str
-
-
-class PricingRequest(BaseModel):
-    base_demand: float  = Field(..., description="Forecasted demand", example=1000.0)
-    base_price: float   = Field(100.0, description="Current base price")
-    elasticity: float   = Field(0.4,   description="Price sensitivity (0.1=low, 0.8=high)")
-    price_min: float    = Field(60.0,  description="Minimum price to consider")
-    price_max: float    = Field(140.0, description="Maximum price to consider")
-
-
-# ─────────────────────────────────────────
-# MODEL LOADING
-# ─────────────────────────────────────────
-
-def load_model_from_disk(model_name: str):
-    path = os.path.join(MODEL_DIR, f"{model_name}.pkl")
-    if not os.path.exists(path):
-        raise HTTPException(
-            status_code=503,
-            detail=f"Model '{model_name}' not found. Run python train.py first."
-        )
-    with open(path, "rb") as f:
-        return pickle.load(f)
-
-
-# ─────────────────────────────────────────
-# ROUTES
-# ─────────────────────────────────────────
-
-@app.get("/", tags=["Info"])
-def root():
-    """Public endpoint — no auth needed. Shows API info."""
-    return {
-        "service": "Fintech Demand Forecasting API",
-        "version": "2.0.0",
-        "status": "running",
-        "docs": "/docs",
-        "auth": "Include 'X-API-Key: fintech-api-key-2025' in headers"
-    }
-
-
-@app.get("/health", tags=["Info"])
-def health():
-    """
-    Health check — used by Docker to verify the container is alive.
-    Also shows which models are trained and ready.
-    """
-    models_available = []
-    if os.path.exists(MODEL_DIR):
-        models_available = [
-            f.replace(".pkl", "")
-            for f in os.listdir(MODEL_DIR)
-            if f.endswith(".pkl")
-        ]
-    return {
-        "status": "healthy",
-        "models_ready": models_available,
-        "predictions_logged": _count_logs()
-    }
-
 
 def _count_logs():
     if not os.path.exists(LOG_PATH):
@@ -216,13 +106,105 @@ def _count_logs():
         except Exception:
             return 0
 
+# ── Model loading ───────────────────────────────────────────────
+def load_model(model_name: str):
+    path = os.path.join(MODEL_DIR, f"{model_name}.pkl")
+    if not os.path.exists(path):
+        raise HTTPException(
+            status_code=503,
+            detail=f"Model '{model_name}' not found. Run: python train.py"
+        )
+    with open(path, "rb") as f:
+        return pickle.load(f)
+
+# ── Request / Response schemas ──────────────────────────────────
+class PredictRequest(BaseModel):
+    # ── Original dataset columns (11 features) ──────────────────
+    week_of_month:       int   = Field(..., example=2,    description="Week of month (1-5)")
+    day_of_week:         float = Field(..., example=3.0,  description="Day of week Mon-Fri (1-5)")
+    non_urgent_order:    float = Field(..., example=50.0, description="Non-urgent order count")
+    urgent_order:        float = Field(..., example=30.0, description="Urgent order count")
+    order_type_a:        float = Field(..., example=20.0, description="Order type A count")
+    order_type_b:        float = Field(..., example=35.0, description="Order type B count")
+    order_type_c:        float = Field(..., example=25.0, description="Order type C count")
+    fiscal_sector:       float = Field(..., example=40.0, description="Fiscal sector orders")
+    traffic_controller:  float = Field(..., example=15.0, description="Traffic controller sector orders")
+    banking_1:           float = Field(..., example=60.0, description="Banking orders (1)")
+    banking_2:           float = Field(..., example=45.0, description="Banking orders (2)")
+    banking_3:           float = Field(..., example=55.0, description="Banking orders (3)")
+    # ── Lag & rolling features (13 features) ────────────────────
+    lag_1:               float = Field(..., example=312.5, description="Demand 1 day ago")
+    lag_3:               float = Field(..., example=289.0, description="Demand 3 days ago")
+    lag_7:               float = Field(..., example=301.2, description="Demand 7 days ago")
+    lag_14:              float = Field(..., example=278.4, description="Demand 14 days ago")
+    rolling_mean_7:      float = Field(..., example=295.3, description="7-day rolling average")
+    rolling_std_7:       float = Field(..., example=18.2,  description="7-day rolling std dev")
+    rolling_mean_14:     float = Field(..., example=291.0, description="14-day rolling average")
+    rolling_max_7:       float = Field(..., example=320.1, description="7-day rolling max")
+    rolling_min_7:       float = Field(..., example=270.5, description="7-day rolling min")
+    momentum_3:          float = Field(..., example=23.5,  description="lag_1 - lag_3")
+    momentum_7:          float = Field(..., example=11.3,  description="lag_1 - lag_7")
+    is_week_start:       int   = Field(0,   example=0,     description="1 if first week of month")
+    is_week_end:         int   = Field(0,   example=0,     description="1 if last week of month")
+    model: Literal["random_forest", "xgboost"] = Field(
+        "xgboost", description="ML model to use for prediction"
+    )
+
+class PredictResponse(BaseModel):
+    predicted_demand:  float
+    model_used:        str
+    optimal_price:     float
+    projected_revenue: float
+    confidence:        str
+    timestamp:         str
+
+class PricingRequest(BaseModel):
+    base_demand: float = Field(...,   example=1000.0, description="Forecasted demand")
+    base_price:  float = Field(100.0, example=100.0,  description="Current base price (₹)")
+    elasticity:  float = Field(0.4,   example=0.4,    description="Price sensitivity (0.1=low, 0.8=high)")
+    price_min:   float = Field(60.0,  example=60.0,   description="Minimum price to consider")
+    price_max:   float = Field(140.0, example=140.0,  description="Maximum price to consider")
+
+# ── Routes ──────────────────────────────────────────────────────
+
+@app.get("/", tags=["Info"])
+def root():
+    """Public — no auth needed."""
+    return {
+        "service": "Fintech Demand Forecasting API",
+        "version": "2.0.0",
+        "status":  "running",
+        "docs":    "/docs",
+        "auth":    "Add header: X-API-Key: fintech-api-key-2025",
+    }
+
+
+@app.get("/health", tags=["Info"])
+def health():
+    """
+    Health check — Docker uses this to verify the container is alive.
+    Also shows which models are trained and ready.
+    """
+    models_ready = []
+    if os.path.exists(MODEL_DIR):
+        models_ready = [
+            f.replace(".pkl", "")
+            for f in os.listdir(MODEL_DIR)
+            if f.endswith(".pkl")
+        ]
+    return {
+        "status":              "healthy",
+        "models_ready":        models_ready,
+        "predictions_logged":  _count_logs(),
+    }
+
 
 @app.get("/leaderboard", tags=["Models"])
 def get_leaderboard(user: str = Depends(verify_api_key)):
     """
     Returns the model comparison leaderboard.
-    Shows RMSE, MAE, R², and composite score for all trained models.
-    Requires API key.
+    Shows RMSE, MAE, R², MAPE, and composite score for all trained models.
+    Champion model is ranked #1.
     """
     path = os.path.join(MODEL_DIR, "leaderboard.json")
     if not os.path.exists(path):
@@ -231,81 +213,106 @@ def get_leaderboard(user: str = Depends(verify_api_key)):
         return {"leaderboard": json.load(f), "requested_by": user}
 
 
-@app.post("/predict", response_model=ForecastResponse, tags=["Forecasting"])
-def predict(request: ForecastRequest, user: str = Depends(verify_api_key)):
+@app.post("/predict", response_model=PredictResponse, tags=["Forecasting"])
+def predict(req: PredictRequest, user: str = Depends(verify_api_key)):
     """
-    Main prediction endpoint.
+    **Main prediction endpoint.**
 
-    Send yesterday's demand stats → get tomorrow's demand forecast + optimal price.
+    Send today's order breakdown + demand statistics → get tomorrow's demand forecast
+    + the optimal price to charge to maximise revenue.
 
-    WHY THIS IS USEFUL:
-    A fintech company can call this every morning with the previous day's numbers.
-    The API returns how much demand to expect + what price to charge today.
-    No human needed — fully automated.
+    Feature order matches training exactly:
+    week_of_month, day_of_week, non_urgent_order, urgent_order,
+    order_type_a, order_type_b, order_type_c, fiscal_sector,
+    traffic_controller, banking_1, banking_2, banking_3,
+    lag_1, lag_3, lag_7, lag_14, rolling_mean_7, rolling_std_7,
+    rolling_mean_14, rolling_max_7, rolling_min_7,
+    momentum_3, momentum_7, is_week_start, is_week_end  →  25 total
     """
+    # ── Build feature vector in exact training order ─────────────
     features = np.array([[
-        request.lag_1, request.lag_3, request.lag_7, request.lag_14,
-        request.rolling_mean_7, request.rolling_std_7, request.rolling_mean_14,
-        request.rolling_max_7, request.rolling_min_7,
-        request.momentum_3, request.momentum_7,
-        request.week_of_month, request.is_week_start, request.is_week_end
-    ]])
+        req.week_of_month,
+        req.day_of_week,
+        req.non_urgent_order,
+        req.urgent_order,
+        req.order_type_a,
+        req.order_type_b,
+        req.order_type_c,
+        req.fiscal_sector,
+        req.traffic_controller,
+        req.banking_1,
+        req.banking_2,
+        req.banking_3,
+        req.lag_1,
+        req.lag_3,
+        req.lag_7,
+        req.lag_14,
+        req.rolling_mean_7,
+        req.rolling_std_7,
+        req.rolling_mean_14,
+        req.rolling_max_7,
+        req.rolling_min_7,
+        req.momentum_3,
+        req.momentum_7,
+        req.is_week_start,
+        req.is_week_end,
+    ]])  # shape: (1, 25)
 
-    model = load_model_from_disk(request.model)
+    model = load_model(req.model)
     pred  = float(model.predict(features)[0])
 
     from src.pricing import find_optimal_price
     pricing = find_optimal_price(base_demand=pred)
 
-    timestamp = datetime.now().isoformat()
     response_data = {
-        "predicted_demand": round(pred, 2),
-        "model_used": request.model,
-        "optimal_price": pricing["optimal_price"],
+        "predicted_demand":  round(pred, 2),
+        "model_used":        req.model,
+        "optimal_price":     pricing["optimal_price"],
         "projected_revenue": pricing["optimal_revenue"],
-        "confidence": "high" if pred > 0 else "low",
-        "timestamp": timestamp,
+        "confidence":        "high" if pred > 0 else "low",
+        "timestamp":         datetime.now().isoformat(),
     }
 
-    # Log the prediction
-    log_prediction(inputs=request.dict(), prediction=response_data)
-
-    return ForecastResponse(**response_data)
+    log_prediction(inputs=req.dict(), prediction=response_data)
+    return PredictResponse(**response_data)
 
 
 @app.post("/pricing/optimize", tags=["Pricing"])
-def optimize_pricing(request: PricingRequest, user: str = Depends(verify_api_key)):
+def optimize_pricing(req: PricingRequest, user: str = Depends(verify_api_key)):
     """
-    Given a demand forecast, returns the optimal price to maximize revenue.
+    Given a demand forecast, returns the optimal price to maximise revenue.
 
-    Uses price elasticity model:
-    demand(price) = base_demand × (1 - elasticity × (price - base_price) / base_price)
+    Uses the price elasticity model:
+    `demand(price) = base_demand × (1 - elasticity × (price - base_price) / base_price)`
 
     Higher elasticity = customers are more price-sensitive.
     """
     from src.pricing import find_optimal_price
     result = find_optimal_price(
-        base_demand=request.base_demand,
-        base_price=request.base_price,
-        elasticity=request.elasticity,
-        price_min=request.price_min,
-        price_max=request.price_max,
+        base_demand=req.base_demand,
+        base_price=req.base_price,
+        elasticity=req.elasticity,
+        price_min=req.price_min,
+        price_max=req.price_max,
     )
     return {
-        "optimal_price": result["optimal_price"],
+        "optimal_price":   result["optimal_price"],
         "optimal_revenue": result["optimal_revenue"],
-        "optimal_demand": result["optimal_demand"],
-        "requested_by": user,
+        "optimal_demand":  result["optimal_demand"],
+        "requested_by":    user,
     }
 
 
 @app.get("/pricing/segments", tags=["Pricing"])
-def get_segment_pricing(base_demand: float = 1000.0, user: str = Depends(verify_api_key)):
+def get_segment_pricing(
+    base_demand: float = 1000.0,
+    user: str = Depends(verify_api_key)
+):
     """
-    Returns risk-tiered pricing for 3 borrower segments:
-    Low Risk (prime), Medium Risk (near-prime), High Risk (subprime).
-    This is how real fintech lenders price credit products differently
-    for different customer segments.
+    Risk-tiered pricing for 3 borrower segments:
+    - **Low Risk** (prime borrowers) — low elasticity, lower rate
+    - **Medium Risk** (near-prime) — baseline pricing
+    - **High Risk** (subprime) — high elasticity, higher rate
     """
     from src.pricing import segment_pricing
     df = segment_pricing(base_demand)
@@ -315,12 +322,14 @@ def get_segment_pricing(base_demand: float = 1000.0, user: str = Depends(verify_
 @app.get("/pricing/scenarios", tags=["Pricing"])
 def get_scenarios(
     base_demand: float = 1000.0,
-    base_price: float = 100.0,
+    base_price:  float = 100.0,
     user: str = Depends(verify_api_key)
 ):
     """
-    What-if analysis: how does revenue change under different market conditions?
-    Conservative / Baseline / Aggressive / Crisis elasticity scenarios.
+    What-if scenario analysis across 4 market conditions:
+    Conservative / Baseline / Aggressive / Crisis
+
+    Use this to stress-test your pricing strategy before going live.
     """
     from src.pricing import scenario_analysis
     df = scenario_analysis(base_demand, base_price)
@@ -328,14 +337,18 @@ def get_scenarios(
 
 
 @app.get("/logs", tags=["Monitoring"])
-def get_prediction_logs(limit: int = 20, user: str = Depends(verify_api_key)):
+def get_logs(limit: int = 20, user: str = Depends(verify_api_key)):
     """
-    Returns recent prediction logs.
+    Returns recent prediction logs — the full audit trail.
 
-    WHY THIS EXISTS:
-    In production, you monitor every prediction your model makes.
-    If predictions suddenly spike or drop, something is wrong.
-    This endpoint lets you audit what the model has been predicting.
+    Every call to /predict is saved here with:
+    - timestamp
+    - input features
+    - predicted demand
+    - recommended price
+    - revenue projection
+
+    In production this would go to PostgreSQL.
     """
     if not os.path.exists(LOG_PATH):
         return {"logs": [], "total": 0}
@@ -345,7 +358,7 @@ def get_prediction_logs(limit: int = 20, user: str = Depends(verify_api_key)):
         except Exception:
             logs = []
     return {
-        "logs": logs[-limit:],
+        "logs":              logs[-limit:],
         "total_predictions": len(logs),
-        "requested_by": user,
+        "requested_by":      user,
     }
