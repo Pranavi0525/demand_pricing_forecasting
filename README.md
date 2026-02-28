@@ -1,294 +1,231 @@
-# demand-pricing-forecasting
+# 📈 Fintech Demand Forecasting & Dynamic Pricing
 
-
----
-
-##  Project Summary
-
-This project builds an **end-to-end demand forecasting system** combined with a **simple dynamic pricing engine**.
-
-It uses:
-
-- **Classical ML** → Random Forest Regressor  
-- **Deep Learning** → LSTM (Long Short-Term Memory network)
-
-The project demonstrates:
-
-- ✅ How to forecast daily demand using lag-based features  
-- ✅ How to compare classical ML vs deep learning for time-series  
-- ✅ How to simulate demand as a function of price  
-- ✅ How to estimate optimal price using a revenue curve  
-- ✅ How to combine forecasting + pricing into a business pipeline  
+> An end-to-end machine learning system that predicts daily loan/product demand and automatically optimizes pricing — built for fintech companies like KreditBee, Slice, and LazyPay.
 
 ---
 
-##  1. Problem Statement
+## 🧠 What Problem Does This Solve?
 
-Given daily order data, the goal is to predict:
+Fintech companies face two daily problems:
 
-- Future daily demand  
-- The best price to charge to maximize revenue  
+1. **Demand uncertainty** — How many loan applications will come tomorrow? If unprepared, servers crash and customers leave.
+2. **Pricing decisions** — What interest rate should we charge today? Too high = customers leave. Too low = lost revenue.
 
-This mimics how **e-commerce, food delivery, logistics, and retail platforms** make pricing decisions in the real world.
-
----
-
-##  2. Dataset
-
-Columns included (may vary slightly by version):
-
-- **Daily order counts** (Target)  
-- **Urgent / Non-urgent / Returned orders**  
-- **Day-of-week, week-of-month**  
-- **Lag features**  
-- **Rolling averages**
-
-The dataset does **not** include price, so a **simulated economic price–demand model** is used in the pricing step.
+This system solves both automatically using machine learning.
 
 ---
 
-##  3. Feature Engineering (Core of the Project)
+## 🏗️ System Architecture
 
-Time-series forecasting requires the model to understand **recent history** and **patterns over time**.
-
-The following features were created:
-
-### ✔ Lag Features
-
-- `lag_1` → yesterday’s demand  
-- `lag_7` → demand 1 week ago  
-
-These capture **short and medium-term temporal effects**.
-
-### ✔ Rolling Window Features
-
-- `rolling_mean_7` → average of last 7 days  
-
-This helps:
-
-- Smooth day-to-day noise  
-- Capture **trend** and **weekly behavior**
-
-### ✔ Calendar Features
-
-- Day of week  
-- Week of month  
-
-These features model **weekly seasonality** (e.g., weekends vs weekdays).
-
-### ✔ Why Feature Engineering Matters
-
-- Tree-based models like **Random Forest** depend heavily on engineered features.  
-- **LSTMs** can learn temporal structure internally, but require:
-  - Proper scaling  
-  - Sufficient data  
-  - Sequence formatting
-
----
-
-## 4. Train/Test Split (Time-based)
-
-- Data was split using **80% past → 20% future**.  
-- **No shuffling** was performed.  
-- This preserves the natural **time order**, which is critical for time-series forecasting.
+```
+Raw CSV Data
+     │
+     ▼
+┌─────────────────┐
+│  Feature        │  ← Lag features, rolling averages,
+│  Engineering    │    momentum, calendar features
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────────────────────────┐
+│         Model Training Pipeline     │
+│  ┌──────────┐  ┌──────────────────┐ │
+│  │  Random  │  │    XGBoost       │ │
+│  │  Forest  │  │  (Champion ✓)    │ │
+│  └──────────┘  └──────────────────┘ │
+│  ┌──────────┐  ┌──────────────────┐ │
+│  │   LSTM   │  │    Prophet       │ │
+│  └──────────┘  └──────────────────┘ │
+└────────────────────┬────────────────┘
+                     │
+         ┌───────────┴───────────┐
+         ▼                       ▼
+┌─────────────────┐    ┌──────────────────┐
+│  Pricing Engine │    │  Model Leaderboard│
+│  (Elasticity    │    │  (Auto-selects    │
+│   Model)        │    │   best model)     │
+└────────┬────────┘    └──────────────────┘
+         │
+    ┌────┴─────┐
+    ▼          ▼
+FastAPI     Streamlit
+  API       Dashboard
+(port 8000) (port 8501)
+    │
+    ▼
+Docker Compose
+(runs both together)
+```
 
 ---
 
-##  5. Random Forest Model
+## 📊 Results
 
-### ✔ Why Random Forest?
+| Model | RMSE ↓ | MAE ↓ | R² ↑ | Score |
+|-------|--------|-------|------|-------|
+| 🥇 XGBoost | 25.99 | 18.86 | 0.759 | 100 |
+| 🥈 Random Forest | 30.63 | 26.66 | 0.665 | 86.4 |
+| 🥉 Prophet | 83.53 | 61.42 | -1.49 | 3.7 |
 
-Random Forest works extremely well on:
-
-- Structured **tabular data**  
-- **Engineered features** (lags, rolling stats, calendar variables)  
-- **Non-linear relationships**  
-- **Small to medium-sized datasets**
-
-### ✔ Results
-
-In this project, **Random Forest performed better than LSTM**.
-
-####  Why Random Forest beat LSTM here:
-
-- **Dataset size is small**  
-  - LSTMs generally need **large sequential datasets** to shine.
-
-- **Feature engineering was strong**  
-  - Lag features + rolling averages already encode temporal structure well.
-
-- **Noise and irregularity**  
-  - Tree models like Random Forest handle noisy patterns robustly.
-
-- **LSTM underfit on this dataset**  
-  - With limited data, LSTMs tend to output near-constant or smoothed predictions.
-
-- **Random Forest does not require scaling**  
-  - LSTM is more sensitive to feature scaling and sequence formatting.
-
-### ✔ Interpretation
-
-Random Forest captured the **non-linear relationships** between lag features, rolling means, and demand **more effectively** than LSTM in this particular setting.
+**Champion Model: XGBoost** — best at capturing non-linear demand patterns in structured tabular data.
 
 ---
 
-##  6. LSTM Model (Deep Learning)
+## 🗂️ Project Structure
 
-### ✔ Why LSTM?
-
-LSTMs are designed to capture **temporal dependencies** by directly learning from input **sequences**.
-
-### ✔ Sequence Construction
-
-A sequence window of **14 days** was used:
-
-- **Input:** 14-day window of features  
-- **Target:** demand on **day 15**  
-
-Each training sample corresponds to:
-
-> “Given the last 14 days, predict demand for the next day.”
-
-### ✔ Why LSTM performed worse here:
-
-- Dataset was **too small** for deep learning to generalize well.  
-- LSTM requires **more historical depth** and data density.  
-- Harder to learn strong seasonality without large sequences.  
-- LSTM is **sensitive to scaling and hyperparameters**.  
-- With limited data, LSTMs often tend to output **“flat” or smoothed predictions**.
-
-### ✔ Still Valuable for the Project
-
-Including the LSTM model demonstrates:
-
-- ✔ Knowledge of deep learning architectures  
-- ✔ Understanding of **sequence modeling**  
-- ✔ Ability to **compare classical ML vs DL** and choose the appropriate one
+```
+demand-pricing-forecasting/
+├── data/
+│   └── Daily Demand Forecasting Orders.csv   ← raw data
+├── src/
+│   ├── features.py     ← feature engineering pipeline
+│   ├── model.py        ← RF + XGBoost + LSTM + Prophet
+│   ├── pricing.py      ← dynamic pricing engine
+│   └── evaluate.py     ← metrics + model leaderboard
+├── api/
+│   └── main.py         ← FastAPI REST endpoints
+├── tests/
+│   ├── test_features.py
+│   └── test_api.py
+├── app.py              ← Streamlit dashboard (5 pages)
+├── train.py            ← training pipeline entry point
+├── Dockerfile
+├── docker-compose.yml
+└── requirements.txt
+```
 
 ---
 
-##  7. Dynamic Pricing Engine (Simulated)
+## ⚙️ How to Run
 
-Since the dataset does not contain a price column, a **simple price elasticity model** was used to simulate how demand responds to different prices.
+### Option 1 — Run Locally
 
-### ✔ Price–Demand Formula
+```bash
+# 1. Clone the repo
+git clone https://github.com/YOUR_USERNAME/demand-pricing-forecasting.git
+cd demand-pricing-forecasting
 
-We assume a **linearized price elasticity** around a base price:
+# 2. Create virtual environment
+python -m venv venv
+venv\Scripts\activate        # Windows
+source venv/bin/activate     # Mac/Linux
 
-\[
-d(p) = d_{\text{base}} \times \left( 1 - e \cdot \frac{p - p_{\text{base}}}{p_{\text{base}}} \right)
-\]
+# 3. Install dependencies
+pip install -r requirements.txt
 
-Where:
+# 4. Train all models (do this first!)
+python train.py
 
-- \( d(p) \) = simulated demand at price \( p \)  
-- \( d_{\text{base}} \) = predicted demand at base price (from the model)  
-- \( p_{\text{base}} = 100 \) → reference/base price  
-- \( e \) = elasticity coefficient (e.g., 0.4)  
+# 5. Launch dashboard
+streamlit run app.py
 
-**Intuition:**
+# 6. Launch API (new terminal)
+uvicorn api.main:app --reload --port 8000
+```
 
-- If \( p > p_{\text{base}} \) → demand decreases  
-- If \( p < p_{\text{base}} \) → demand increases  
-- Larger \( e \) → more sensitive demand is to price changes
+### Option 2 — Run with Docker (Recommended)
 
-### ✔ Revenue Formula
+```bash
+# Runs both FastAPI + Streamlit together
+docker-compose up --build
+```
 
-\[
-R(p) = p \times d(p)
-\]
-
-### ✔ What the Pricing Engine Does
-
-1. Takes predicted demand (`d_base`) from the ML/DL model.  
-2. Simulates demand over a range of candidate prices (e.g., ₹60–₹140).  
-3. Computes **revenue** at each price using `R(p) = p * d(p)`.  
-4. Selects the price with **maximum simulated revenue**.
-
-### ✔ Why this is useful
-
-This converts **pure forecasting** into a **business decision tool**.
-
-Companies apply similar ideas in:
-
-- Dynamic **surge pricing** (e.g., Uber)  
-- **Hotel room** pricing  
-- **Airline** ticket pricing  
-- **E-commerce** promotional pricing  
+Then visit:
+- Dashboard → http://localhost:8501
+- API Docs → http://localhost:8000/docs
 
 ---
 
-## 📈 8. Visualizations
+## 🔌 API Usage
 
-The notebook includes several helpful visualizations:
+### Predict Demand + Optimal Price
 
-### ✔ Distribution of Target
+```bash
+POST http://localhost:8000/predict
+```
 
-- Helps understand **skewness**, **spread**, and **outliers** in daily demand.
+**Request:**
+```json
+{
+  "lag_1": 312.5,
+  "lag_3": 289.0,
+  "lag_7": 301.2,
+  "lag_14": 278.4,
+  "rolling_mean_7": 295.3,
+  "rolling_std_7": 18.2,
+  "rolling_mean_14": 291.0,
+  "rolling_max_7": 320.1,
+  "rolling_min_7": 270.5,
+  "momentum_3": 23.5,
+  "momentum_7": 11.3,
+  "week_of_month": 2,
+  "is_week_start": 0,
+  "is_week_end": 0,
+  "model": "xgboost"
+}
+```
 
-### ✔ Correlation Heatmap
+**Response:**
+```json
+{
+  "predicted_demand": 334.7,
+  "model_used": "xgboost",
+  "optimal_price": 106.5,
+  "projected_revenue": 35645.55,
+  "confidence": "high"
+}
+```
 
-- Reveals relationships between features.  
-- Highlights which features are most related to demand.
+### Other Endpoints
 
-### ✔ Actual vs Predicted (Random Forest vs LSTM)
-
-- Compares model behavior visually.  
-- Shows that Random Forest tracks demand more closely than LSTM.
-
-### ✔ Revenue vs Price Curve
-
-- Plots **Revenue** as a function of **Price**.  
-- Shows the approximate **optimal price** where revenue peaks.
-
----
-
-##  9. Results Summary
-
-| Model          | RMSE      | MAE       | R²        | Notes                       |
-|----------------|----------:|----------:|----------:|-----------------------------|
-| **Random Forest** | ⭐ Lower  | ⭐ Lower  | ⭐ Higher | Best-performing model       |
-| **LSTM**          | Higher   | Higher   | Negative  | Underfit on small dataset   |
-
-> **Key outcome:** On this dataset, **classical ML (Random Forest)** outperformed **deep learning (LSTM)**.
-
----
-
-##  10. Key Insights
-
-- **Classical ML beat Deep Learning** on this dataset  
-  → Important reminder that **DL is not always better**.
-
-- **Lag Features + Rolling Averages are powerful**  
-  → Good feature engineering can make traditional models very strong.
-
-- **LSTM requires larger sequential data** to truly shine  
-  → Especially for capturing complex seasonality and long-term trends.
-
-- Combining **demand forecasting + pricing** leads to an **end-to-end business solution**, not just a predictive model.
-
-- A **revenue-maximizing price** can be computed by combining demand forecasts with a simple economic model.
-
----
-
-##  11. Future Work
-
-Potential improvements and extensions:
-
-- Incorporate **real price data** instead of a simulated elasticity model.  
-- Add external features:
-  - Weather data  
-  - Promotions/discount campaigns  
-  - Holidays and events  
-- Explore **attention-based models** (Transformers for time-series).  
-- Perform **systematic hyperparameter tuning** for LSTM.  
-- Add classical time-series baselines:
-  - **Prophet**  
-  - **ARIMA / SARIMA**  
+| Method | Endpoint | What it does |
+|--------|----------|-------------|
+| GET | `/health` | Check if API is running |
+| GET | `/leaderboard` | Get model comparison results |
+| POST | `/pricing/optimize` | Get optimal price for any demand |
+| GET | `/pricing/segments` | Risk-based pricing table |
+| GET | `/pricing/scenarios` | What-if scenario analysis |
 
 ---
 
-##  Author
+## 💡 Key Technical Decisions & Why
 
-** Pranavi Devulapalli**  
+### Why XGBoost won?
+XGBoost is a gradient boosting algorithm — it builds trees sequentially, each one learning from the mistakes of the previous one. For structured tabular data like daily orders, it consistently outperforms other models because it handles non-linear relationships, missing values, and feature interactions natively.
 
+### Why Dynamic Pricing?
+We use a **price elasticity model**: `demand(price) = base_demand × (1 - elasticity × (price - base_price) / base_price)`. This is the same mathematical model used by airlines, ride-sharing apps, and fintech lenders to set prices in real time.
+
+### Why Docker?
+So the project runs identically on any machine — your laptop, a teammate's laptop, or a cloud server — with zero setup. `docker-compose up` starts both services automatically.
+
+### Why FastAPI over Flask?
+FastAPI is async, faster, and auto-generates interactive API documentation at `/docs`. It's the industry standard for ML model serving in 2024-25.
+
+---
+
+## 🧪 Run Tests
+
+```bash
+pytest tests/ -v
+```
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Data Processing | Pandas, NumPy |
+| ML Models | Scikit-learn, XGBoost, TensorFlow/Keras, Prophet |
+| API | FastAPI, Uvicorn, Pydantic |
+| Dashboard | Streamlit, Plotly |
+| Containerization | Docker, Docker Compose |
+| Testing | Pytest |
+
+---
+
+## 👤 Author
+
+**Pranavi Devulapalli**
+B.Tech Data Science — Sai University

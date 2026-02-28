@@ -1,0 +1,62 @@
+# .github/workflows/ci.yml
+#
+# WHY WE HAVE THIS FILE:
+# CI/CD = Continuous Integration / Continuous Deployment
+#
+# Every time you push code to GitHub, this file runs automatically.
+# It:
+#   1. Installs all your dependencies
+#   2. Runs your tests (pytest)
+#   3. If tests pass → code is safe to deploy
+#   4. If tests fail → GitHub shows a red X and won't deploy broken code
+#
+# This is standard practice in every tech company.
+# No code reaches production without passing automated tests first.
+# Netflix, Google, Razorpay — all use this exact pattern.
+
+name: CI — Test & Validate
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # Step 1: Get the code from GitHub
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Step 2: Set up Python 3.11
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      # Step 3: Cache pip packages so it's faster next time
+      - name: Cache pip
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+
+      # Step 4: Install dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+
+      # Step 5: Run the tests
+      - name: Run tests
+        run: |
+          pytest tests/ -v --tb=short
+
+      # Step 6: Show test coverage (what % of code is tested)
+      - name: Test coverage report
+        run: |
+          pytest tests/ --cov=src --cov-report=term-missing
