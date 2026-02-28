@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-Fintech Demand Forecasting - Streamlit Dashboard
+Fintech Demand Forecasting - Streamlit Dashboard  (v3.0 — PostgreSQL edition)
 Run: streamlit run app.py
 """
 
@@ -26,23 +26,25 @@ st.set_page_config(
 )
 
 COLORS = {
-    "rf": "#2563EB",
-    "xgb": "#16A34A",
-    "lstm": "#DC2626",
+    "rf":      "#2563EB",
+    "xgb":     "#16A34A",
+    "lstm":    "#DC2626",
     "prophet": "#9333EA",
-    "actual": "#F59E0B",
-    "bg": "#0F172A",
+    "actual":  "#F59E0B",
+    "bg":      "#0F172A",
 }
 
 DATA_PATH = "data/Daily Demand Forecasting Orders.csv"
-MODEL_DIR = "models"
+MODEL_DIR  = "models"
+API_URL    = os.environ.get("API_URL", "http://api:8000")
+API_KEY    = "fintech-api-key-2025"
 
 
+# ── Cached data loaders ────────────────────────────────────────
 @st.cache_data
 def get_processed_data():
     raw = load_data(DATA_PATH)
-    df = build_features(raw)
-    return df
+    return build_features(raw)
 
 
 @st.cache_data
@@ -74,7 +76,7 @@ def get_predictions(df):
 
     try:
         from src.model import predict_lstm
-        lstm_preds, lstm_true = predict_lstm(X_test_s, y_test, window=14)
+        lstm_preds, _ = predict_lstm(X_test_s, y_test, window=14)
         if len(lstm_preds) > 0:
             preds["LSTM"] = np.concatenate([np.full(14, np.nan), lstm_preds])
     except Exception:
@@ -91,7 +93,28 @@ def load_leaderboard():
     return None
 
 
-# Sidebar
+def fetch_logs_from_api(limit: int = 100) -> pd.DataFrame:
+    """Pull prediction history directly from the API (backed by PostgreSQL)."""
+    try:
+        resp = requests.get(
+            f"{API_URL}/logs",
+            headers={"X-API-Key": API_KEY},
+            params={"limit": limit},
+            timeout=5,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            logs = data.get("logs", [])
+            if logs:
+                df = pd.DataFrame(logs)
+                df["timestamp"] = pd.to_datetime(df["timestamp"])
+                return df, data.get("total_predictions", len(logs))
+    except Exception:
+        pass
+    return pd.DataFrame(), 0
+
+
+# ── Sidebar ────────────────────────────────────────────────────
 with st.sidebar:
     st.image("https://img.icons8.com/fluency/96/combo-chart.png", width=60)
     st.title("📊 Fintech Demand\nForecasting")
@@ -100,7 +123,15 @@ with st.sidebar:
 
     page = st.radio(
         "Navigate",
-        ["🏠 Overview", "📈 Forecast", "💰 Pricing Engine", "🏆 Model Leaderboard", "🔬 Scenario Analysis", "🎯 Live Prediction"],
+        [
+            "🏠 Overview",
+            "📈 Forecast",
+            "💰 Pricing Engine",
+            "🏆 Model Leaderboard",
+            "🔬 Scenario Analysis",
+            "🎯 Live Prediction",
+            "📋 Prediction History",
+        ],
         label_visibility="collapsed"
     )
 
@@ -109,19 +140,23 @@ with st.sidebar:
     st.caption("B.Tech Data Science | Sai University")
 
 
-# Load Data
+# ── Guard ──────────────────────────────────────────────────────
 if not os.path.exists(DATA_PATH):
-    st.error("Data file not found. Please add Daily Demand Forecasting Orders.csv to the data/ folder.")
+    st.error("Data file not found. Please add Daily Demand Forecasting Orders.csv to data/")
     st.stop()
 
 df = get_processed_data()
 preds, y_test, split = get_predictions(df)
 
 
-# PAGE 1: OVERVIEW
+# ══════════════════════════════════════════════════════════════
+# PAGE 1 — OVERVIEW
+# ══════════════════════════════════════════════════════════════
 if page == "🏠 Overview":
     st.title("Fintech Demand Forecasting & Dynamic Pricing")
     st.caption("A production-grade ML platform for predicting loan/product demand and optimizing pricing strategies")
+
+    _, total_preds = fetch_logs_from_api(limit=1)
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -169,14 +204,16 @@ if page == "🏠 Overview":
         st.plotly_chart(fig3, use_container_width=True)
 
 
-# PAGE 2: FORECAST
+# ══════════════════════════════════════════════════════════════
+# PAGE 2 — FORECAST
+# ══════════════════════════════════════════════════════════════
 elif page == "📈 Forecast":
     st.title("Model Predictions vs Actuals")
 
     model_colors = {
         "Random Forest": COLORS["rf"],
-        "XGBoost": COLORS["xgb"],
-        "LSTM": COLORS["lstm"],
+        "XGBoost":       COLORS["xgb"],
+        "LSTM":          COLORS["lstm"],
     }
 
     selected_models = st.multiselect(
@@ -211,18 +248,23 @@ elif page == "📈 Forecast":
         if model in preds:
             p = preds[model]
             a = preds["Actual"]
-            min_len = min(len(p), len(a))
+            min_len   = min(len(p), len(a))
             residuals = a[:min_len] - p[:min_len]
-            fig_r = go.Figure(go.Bar(y=residuals, marker_color=np.where(residuals > 0, "#16A34A", "#DC2626")))
+            fig_r = go.Figure(go.Bar(
+                y=residuals,
+                marker_color=np.where(residuals > 0, "#16A34A", "#DC2626")
+            ))
             fig_r.update_layout(
-                title=f"Residuals - {model}",
+                title=f"Residuals — {model}",
                 template="plotly_dark", height=260,
                 margin=dict(l=0, r=0, t=40, b=0)
             )
             st.plotly_chart(fig_r, use_container_width=True)
 
 
-# PAGE 3: PRICING ENGINE
+# ══════════════════════════════════════════════════════════════
+# PAGE 3 — PRICING ENGINE
+# ══════════════════════════════════════════════════════════════
 elif page == "💰 Pricing Engine":
     st.title("Dynamic Pricing Engine")
     st.caption("Simulates how fintech lenders optimize credit product pricing based on demand forecasts")
@@ -238,9 +280,9 @@ elif page == "💰 Pricing Engine":
     result = find_optimal_price(base_demand, base_price, elasticity=elasticity)
 
     m1, m2, m3 = st.columns(3)
-    m1.metric("Optimal Price", f"Rs {result['optimal_price']}")
-    m2.metric("Projected Demand", f"{result['optimal_demand']:.0f} units")
-    m3.metric("Max Revenue", f"Rs {result['optimal_revenue']:,.0f}")
+    m1.metric("Optimal Price",     f"Rs {result['optimal_price']}")
+    m2.metric("Projected Demand",  f"{result['optimal_demand']:.0f} units")
+    m3.metric("Max Revenue",       f"Rs {result['optimal_revenue']:,.0f}")
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -267,7 +309,9 @@ elif page == "💰 Pricing Engine":
     st.dataframe(seg_df, use_container_width=True, hide_index=True)
 
 
-# PAGE 4: LEADERBOARD
+# ══════════════════════════════════════════════════════════════
+# PAGE 4 — LEADERBOARD
+# ══════════════════════════════════════════════════════════════
 elif page == "🏆 Model Leaderboard":
     st.title("Model Leaderboard")
     st.caption("Champion model selected by composite score (RMSE 40% + MAE 30% + R2 30%)")
@@ -281,9 +325,9 @@ elif page == "🏆 Model Leaderboard":
         st.dataframe(lb, use_container_width=True, hide_index=True)
 
         fig = go.Figure()
-        colors = [COLORS["rf"], COLORS["xgb"], COLORS["lstm"], COLORS["prophet"]]
+        colors   = [COLORS["rf"], COLORS["xgb"], COLORS["lstm"], COLORS["prophet"]]
         rmse_col = [c for c in lb.columns if "RMSE" in c][0]
-        mae_col  = [c for c in lb.columns if "MAE" in c][0]
+        mae_col  = [c for c in lb.columns if "MAE"  in c][0]
         for i, row in lb.iterrows():
             fig.add_trace(go.Bar(
                 name=row["Model"], x=["RMSE", "MAE"],
@@ -298,18 +342,21 @@ elif page == "🏆 Model Leaderboard":
         st.plotly_chart(fig, use_container_width=True)
 
 
-# PAGE 5: SCENARIO ANALYSIS
+# ══════════════════════════════════════════════════════════════
+# PAGE 5 — SCENARIO ANALYSIS
+# ══════════════════════════════════════════════════════════════
 elif page == "🔬 Scenario Analysis":
     st.title("Scenario Analysis")
     st.caption("What-if analysis across different market conditions and demand elasticity assumptions")
 
     base_demand = st.slider("Base Demand", 100, 5000, 1000, step=100)
-    base_price = st.slider("Base Price (Rs)", 60, 200, 100)
+    base_price  = st.slider("Base Price (Rs)", 60, 200, 100)
 
-    sc_df = scenario_analysis(base_demand, base_price)
+    sc_df   = scenario_analysis(base_demand, base_price)
+    rev_col = [c for c in sc_df.columns if "Revenue" in c][0]
+
     st.dataframe(sc_df, use_container_width=True, hide_index=True)
 
-    rev_col = [c for c in sc_df.columns if "Revenue" in c][0]
     fig = go.Figure(go.Bar(
         x=sc_df["Scenario"],
         y=sc_df[rev_col],
@@ -327,8 +374,8 @@ elif page == "🔬 Scenario Analysis":
 
     st.subheader("Price Sensitivity Curves")
     scenarios = {"Conservative": 0.2, "Baseline": 0.4, "Aggressive": 0.6}
-    fig2 = go.Figure()
-    cols = ["#16A34A", "#2563EB", "#DC2626"]
+    fig2  = go.Figure()
+    cols  = ["#16A34A", "#2563EB", "#DC2626"]
     for (label, e), color in zip(scenarios.items(), cols):
         r = find_optimal_price(base_demand, base_price, elasticity=e)
         fig2.add_trace(go.Scatter(
@@ -345,17 +392,16 @@ elif page == "🔬 Scenario Analysis":
     st.plotly_chart(fig2, use_container_width=True)
 
 
-# PAGE 6: LIVE PREDICTION
+# ══════════════════════════════════════════════════════════════
+# PAGE 6 — LIVE PREDICTION
+# ══════════════════════════════════════════════════════════════
 elif page == "🎯 Live Prediction":
     st.title("🎯 Live Demand Prediction")
     st.caption("Enter today's order breakdown + demand stats to get tomorrow's forecast via FastAPI")
 
-    API_URL = os.environ.get("API_URL", "http://api:8000")
-    API_KEY = "fintech-api-key-2025"
+    st.info("Every prediction is automatically saved to PostgreSQL — visible in **Prediction History**.")
 
-    st.info("This page calls your FastAPI backend in real time. Every prediction is logged to the audit trail.")
-
-    st.subheader("Order Breakdown (from today's data)")
+    st.subheader("Order Breakdown")
     o1, o2, o3 = st.columns(3)
     with o1:
         day_of_week        = st.number_input("Day of week (1=Mon, 5=Fri)", min_value=1, max_value=5, value=3)
@@ -381,11 +427,11 @@ elif page == "🎯 Live Prediction":
         lag_14 = st.number_input("Demand 14 days ago (lag_14)", value=278.4)
     with col2:
         st.subheader("Rolling Statistics")
-        rolling_mean_7  = st.number_input("7-day rolling average",  value=295.3)
-        rolling_std_7   = st.number_input("7-day rolling std dev",  value=18.2)
+        rolling_mean_7  = st.number_input("7-day rolling average", value=295.3)
+        rolling_std_7   = st.number_input("7-day rolling std dev", value=18.2)
         rolling_mean_14 = st.number_input("14-day rolling average", value=291.0)
-        rolling_max_7   = st.number_input("7-day max",             value=320.1)
-        rolling_min_7   = st.number_input("7-day min",             value=270.5)
+        rolling_max_7   = st.number_input("7-day max", value=320.1)
+        rolling_min_7   = st.number_input("7-day min", value=270.5)
 
     st.subheader("Context")
     col3, col4, col5 = st.columns(3)
@@ -404,25 +450,18 @@ elif page == "🎯 Live Prediction":
 
     if st.button("🚀 Predict Tomorrow's Demand", type="primary"):
         payload = {
-            "week_of_month": week_of_month,
-            "day_of_week": day_of_week,
-            "non_urgent_order": non_urgent_order,
-            "urgent_order": urgent_order,
-            "order_type_a": order_type_a,
-            "order_type_b": order_type_b,
-            "order_type_c": order_type_c,
-            "fiscal_sector": fiscal_sector,
+            "week_of_month": week_of_month, "day_of_week": day_of_week,
+            "non_urgent_order": non_urgent_order, "urgent_order": urgent_order,
+            "order_type_a": order_type_a, "order_type_b": order_type_b,
+            "order_type_c": order_type_c, "fiscal_sector": fiscal_sector,
             "traffic_controller": traffic_controller,
-            "banking_1": banking_1,
-            "banking_2": banking_2,
-            "banking_3": banking_3,
+            "banking_1": banking_1, "banking_2": banking_2, "banking_3": banking_3,
             "lag_1": lag_1, "lag_3": lag_3, "lag_7": lag_7, "lag_14": lag_14,
             "rolling_mean_7": rolling_mean_7, "rolling_std_7": rolling_std_7,
             "rolling_mean_14": rolling_mean_14, "rolling_max_7": rolling_max_7,
             "rolling_min_7": rolling_min_7, "momentum_3": momentum_3,
-            "momentum_7": momentum_7,
-            "is_week_start": is_week_start, "is_week_end": is_week_end,
-            "model": model_choice
+            "momentum_7": momentum_7, "is_week_start": is_week_start,
+            "is_week_end": is_week_end, "model": model_choice,
         }
 
         try:
@@ -436,17 +475,134 @@ elif page == "🎯 Live Prediction":
 
             if response.status_code == 200:
                 result = response.json()
-                st.success("Prediction received from FastAPI!")
+                st.success("Prediction received and logged successfully!")
                 m1, m2, m3 = st.columns(3)
                 m1.metric("Predicted Demand",  f"{result['predicted_demand']:.0f} units")
                 m2.metric("Optimal Price",      f"Rs {result['optimal_price']}")
                 m3.metric("Projected Revenue",  f"Rs {result['projected_revenue']:,.0f}")
-                st.caption(f"Model: `{result['model_used']}` | Confidence: `{result['confidence']}` | {result['timestamp']}")
-                st.caption("This prediction has been logged to the audit trail at /logs")
+                st.caption(
+                    f"Model: `{result['model_used']}` | "
+                    f"Confidence: `{result['confidence']}` | "
+                    f"{result['timestamp']}"
+                )
+                st.info("View full history in the **Prediction History** page.")
             else:
-                st.error(f"API returned error {response.status_code}: {response.text}")
+                st.error(f"API error {response.status_code}: {response.text}")
 
         except requests.exceptions.ConnectionError:
             st.error("Cannot reach FastAPI. Make sure the API container is running.")
         except Exception as e:
             st.error(f"Unexpected error: {e}")
+
+
+# ══════════════════════════════════════════════════════════════
+# PAGE 7 — PREDICTION HISTORY  (replaces prediction_log.json)
+# ══════════════════════════════════════════════════════════════
+elif page == "📋 Prediction History":
+    st.title("📋 Prediction History")
+    st.caption("Live audit trail — every prediction logged with timestamp, inputs, and outputs")
+
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        limit = st.slider("Records to load", 10, 500, 100, step=10)
+    with col2:
+        if st.button("🔄 Refresh"):
+            st.rerun()
+
+    logs_df, total = fetch_logs_from_api(limit=limit)
+
+    if logs_df.empty:
+        st.info("No predictions yet. Go to **Live Prediction** and make your first forecast!")
+    else:
+        # ── Summary metrics ──
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Total Predictions", f"{total:,}")
+        m2.metric("Shown",             f"{len(logs_df):,}")
+        m3.metric("Avg Demand",        f"{logs_df['predicted_demand'].mean():.0f}")
+        m4.metric("Avg Price",         f"Rs {logs_df['optimal_price'].mean():.0f}")
+
+        st.divider()
+
+        # ── Demand over time ──
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=logs_df["timestamp"],
+            y=logs_df["predicted_demand"],
+            mode="lines+markers",
+            name="Predicted Demand",
+            line=dict(color=COLORS["xgb"], width=2),
+            marker=dict(size=6)
+        ))
+        fig.update_layout(
+            title="Predicted Demand Over Time",
+            xaxis_title="Timestamp", yaxis_title="Demand",
+            template="plotly_dark", height=320,
+            margin=dict(l=0, r=0, t=40, b=0)
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        col1, col2 = st.columns(2)
+        with col1:
+            # Revenue over time
+            fig2 = go.Figure(go.Scatter(
+                x=logs_df["timestamp"],
+                y=logs_df["projected_revenue"],
+                mode="lines+markers",
+                line=dict(color=COLORS["actual"], width=2),
+                fill="tozeroy", fillcolor="rgba(245,158,11,0.1)"
+            ))
+            fig2.update_layout(
+                title="Projected Revenue Over Time",
+                template="plotly_dark", height=280,
+                margin=dict(l=0, r=0, t=40, b=0)
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+        with col2:
+            # Model usage breakdown
+            model_counts = logs_df["model_used"].value_counts().reset_index()
+            model_counts.columns = ["Model", "Count"]
+            fig3 = px.pie(
+                model_counts, names="Model", values="Count",
+                title="Model Usage Split",
+                color_discrete_sequence=[COLORS["xgb"], COLORS["rf"]],
+                template="plotly_dark"
+            )
+            fig3.update_layout(height=280, margin=dict(l=0, r=0, t=40, b=0))
+            st.plotly_chart(fig3, use_container_width=True)
+
+        st.subheader("Raw Log Table")
+        display_cols = ["timestamp", "model_used", "predicted_demand",
+                        "optimal_price", "projected_revenue", "confidence"]
+        st.dataframe(
+            logs_df[display_cols].rename(columns={
+                "timestamp":         "Timestamp",
+                "model_used":        "Model",
+                "predicted_demand":  "Demand",
+                "optimal_price":     "Price (Rs)",
+                "projected_revenue": "Revenue (Rs)",
+                "confidence":        "Confidence",
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # ── CSV export button ──
+        st.divider()
+        st.subheader("Export Data")
+        col1, col2 = st.columns(2)
+        with col1:
+            csv_data = logs_df[display_cols].to_csv(index=False).encode("utf-8")
+            st.download_button(
+                label="⬇️ Download as CSV",
+                data=csv_data,
+                file_name="prediction_history.csv",
+                mime="text/csv",
+                help="Downloads the currently loaded records as a CSV file"
+            )
+        with col2:
+            st.markdown(
+                f"Or download the **full history** via the API:  \n"
+                f"`GET {API_URL}/logs/export/csv`  \n"
+                f"*(requires X-API-Key header)*"
+            )

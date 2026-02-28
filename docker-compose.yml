@@ -1,5 +1,22 @@
 services:
 
+  db:
+    image: postgres:15
+    container_name: fintech_db
+    environment:
+      POSTGRES_DB:       fintech
+      POSTGRES_USER:     admin
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - postgres_data:/var/lib/postgresql/data   # named volume — Docker manages it, never lost
+    ports:
+      - "5433:5432"   # 5432 is used by your local PostgreSQL install
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d fintech"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   api:
     build: .
     container_name: fintech_api
@@ -7,15 +24,18 @@ services:
       - "8002:8000"
     volumes:
       - ./models:/app/models
-      # removed ./data:/app/data
     command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DATABASE_URL=postgresql://admin:secret@db:5432/fintech
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-    environment:
-      - PYTHONUNBUFFERED=1
 
   dashboard:
     build: .
@@ -24,9 +44,13 @@ services:
       - "8503:8501"
     volumes:
       - ./models:/app/models
-      # removed ./data:/app/data
     command: streamlit run app.py --server.port 8501 --server.address 0.0.0.0
     depends_on:
       - api
     environment:
       - PYTHONUNBUFFERED=1
+      - API_URL=http://api:8000
+      - DATABASE_URL=postgresql://admin:secret@db:5432/fintech
+
+volumes:
+  postgres_data:   # Docker manages this — survives container rebuilds and restarts
